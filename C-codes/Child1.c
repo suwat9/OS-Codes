@@ -1,3 +1,4 @@
+// ID: 654244001 Name: Suwat ta
 #include <stdio.h>
 
 main() {
@@ -7,3 +8,4 @@ main() {
 	printf("------------------------------\n");
 	getchar();
 }
+

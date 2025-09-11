@@ -1082,6 +1082,8 @@ int main() {
 #include <chrono>
 #include <random>
 #include <algorithm>
+#include <climits>
+#include <memory>
 
 class Task {
 public:
@@ -1108,6 +1110,10 @@ public:
     
     CPUCore(int id) : core_id(id) {}
     
+    // Delete copy constructor and assignment operator due to mutex
+    CPUCore(const CPUCore&) = delete;
+    CPUCore& operator=(const CPUCore&) = delete;
+    
     void addTask(const Task& task) {
         std::lock_guard<std::mutex> lock(queue_mutex);
         local_queue.push(task);
@@ -1127,7 +1133,7 @@ public:
     
     int getQueueSize() {
         std::lock_guard<std::mutex> lock(queue_mutex);
-        return local_queue.size();
+        return static_cast<int>(local_queue.size());
     }
     
     bool isEmpty() {
@@ -1138,12 +1144,13 @@ public:
 
 class MultiProcessorScheduler {
 private:
-    std::vector<CPUCore> cores;
+    std::vector<std::unique_ptr<CPUCore>> cores;
     std::queue<Task> global_queue;
     std::mutex global_mutex;
     std::condition_variable cv;
     std::atomic<bool> running{true};
     std::atomic<int> active_tasks{0};
+    std::atomic<int> completed_tasks{0};
     int num_cores;
     
     // Load balancing parameters
@@ -1152,15 +1159,16 @@ private:
     
 public:
     MultiProcessorScheduler(int cores_count) : num_cores(cores_count) {
+        cores.reserve(cores_count);
         for (int i = 0; i < cores_count; i++) {
-            cores.emplace_back(i);
+            cores.push_back(std::make_unique<CPUCore>(i));
         }
     }
     
     void addTask(const Task& task) {
         if (task.preferred_cpu >= 0 && task.preferred_cpu < num_cores) {
             // Processor affinity - try preferred CPU first
-            cores[task.preferred_cpu].addTask(task);
+            cores[task.preferred_cpu]->addTask(task);
         } else {
             // Global queue for load balancing
             std::lock_guard<std::mutex> lock(global_mutex);
@@ -1173,12 +1181,12 @@ public:
     void cpuScheduler(int core_id) {
         std::cout << "CPU Core " << core_id << " scheduler started\n";
         
-        while (running || active_tasks > 0) {
+        while (running.load() || active_tasks.load() > 0) {
             Task current_task(0, 0);
             bool has_task = false;
             
             // Try to get task from local queue first (processor affinity)
-            if (cores[core_id].getTask(current_task)) {
+            if (cores[core_id]->getTask(current_task)) {
                 has_task = true;
             }
             // Try global queue
@@ -1212,13 +1220,13 @@ public:
         int victim_core = -1;
         
         for (int i = 0; i < num_cores; i++) {
-            if (i != core_id && cores[i].getQueueSize() > max_load + LOAD_BALANCE_THRESHOLD) {
-                max_load = cores[i].getQueueSize();
+            if (i != core_id && cores[i]->getQueueSize() > max_load + LOAD_BALANCE_THRESHOLD) {
+                max_load = cores[i]->getQueueSize();
                 victim_core = i;
             }
         }
         
-        if (victim_core != -1 && cores[victim_core].getTask(stolen_task)) {
+        if (victim_core != -1 && cores[victim_core]->getTask(stolen_task)) {
             std::cout << "Core " << core_id << " stole task " << stolen_task.task_id 
                       << " from Core " << victim_core << "\n";
             return true;
@@ -1228,7 +1236,7 @@ public:
     }
     
     void executeTask(int core_id, Task& task) {
-        cores[core_id].is_busy = true;
+        cores[core_id]->is_busy = true;
         task.start_time = std::chrono::steady_clock::now();
         
         std::cout << "Core " << core_id << " executing Task " << task.task_id 
@@ -1245,20 +1253,23 @@ public:
         std::cout << "Core " << core_id << " completed Task " << task.task_id 
                   << " (Turnaround: " << turnaround_time.count() << "ms)\n";
         
-        cores[core_id].is_busy = false;
+        cores[core_id]->is_busy = false;
         active_tasks--;
+        completed_tasks++;
     }
     
     void loadBalancer() {
-        while (running) {
+        while (running.load()) {
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
             
             // Check load imbalance
-            int min_load = INT_MAX, max_load = 0;
-            int min_core = -1, max_core = -1;
+            int min_load = INT_MAX;
+            int max_load = 0;
+            int min_core = -1;
+            int max_core = -1;
             
             for (int i = 0; i < num_cores; i++) {
-                int load = cores[i].getQueueSize();
+                int load = cores[i]->getQueueSize();
                 if (load < min_load) {
                     min_load = load;
                     min_core = i;
@@ -1272,8 +1283,8 @@ public:
             // Migrate tasks if imbalance is significant
             if (max_load - min_load > LOAD_BALANCE_THRESHOLD && max_core != -1 && min_core != -1) {
                 Task migrated_task(0, 0);
-                if (cores[max_core].getTask(migrated_task)) {
-                    cores[min_core].addTask(migrated_task);
+                if (cores[max_core]->getTask(migrated_task)) {
+                    cores[min_core]->addTask(migrated_task);
                     std::cout << "Load Balancer: Migrated Task " << migrated_task.task_id 
                               << " from Core " << max_core << " to Core " << min_core << "\n";
                 }
@@ -1281,13 +1292,21 @@ public:
         }
     }
     
+    void waitForCompletion() {
+        // Wait until all tasks are completed
+        while (active_tasks.load() > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+    }
+    
     void displayStats() {
         std::cout << "\n=== CPU CORE STATISTICS ===\n";
         for (int i = 0; i < num_cores; i++) {
-            std::cout << "Core " << i << ": Queue Size = " << cores[i].getQueueSize()
-                      << ", Busy = " << (cores[i].is_busy ? "Yes" : "No") << "\n";
+            std::cout << "Core " << i << ": Queue Size = " << cores[i]->getQueueSize()
+                      << ", Busy = " << (cores[i]->is_busy.load() ? "Yes" : "No") << "\n";
         }
         std::cout << "Active Tasks: " << active_tasks.load() << "\n";
+        std::cout << "Completed Tasks: " << completed_tasks.load() << "\n";
     }
     
     void stop() {
@@ -1305,7 +1324,7 @@ private:
         int memory_latency; // Access latency in nanoseconds
         
         NUMANode(int id, std::vector<int> cores, int latency) 
-            : node_id(id), cpu_cores(cores), memory_latency(latency) {}
+            : node_id(id), cpu_cores(std::move(cores)), memory_latency(latency) {}
     };
     
     std::vector<NUMANode> numa_nodes;
@@ -1318,7 +1337,7 @@ public:
     }
     
     int selectOptimalCore(int preferred_node = -1) {
-        if (preferred_node >= 0 && preferred_node < numa_nodes.size()) {
+        if (preferred_node >= 0 && preferred_node < static_cast<int>(numa_nodes.size())) {
             // Return first available core from preferred NUMA node
             const auto& node = numa_nodes[preferred_node];
             if (!node.cpu_cores.empty()) {
@@ -1333,7 +1352,7 @@ public:
         for (size_t i = 1; i < numa_nodes.size(); i++) {
             if (numa_nodes[i].memory_latency < min_latency) {
                 min_latency = numa_nodes[i].memory_latency;
-                best_node = i;
+                best_node = static_cast<int>(i);
             }
         }
         
@@ -1355,64 +1374,76 @@ public:
 };
 
 int main() {
-    std::cout << "=== MULTI-PROCESSOR SCHEDULING DEMO ===\n\n";
-    
-    const int NUM_CORES = 4;
-    MultiProcessorScheduler scheduler(NUM_CORES);
-    
-    // Start CPU schedulers
-    std::vector<std::thread> cpu_threads;
-    for (int i = 0; i < NUM_CORES; i++) {
-        cpu_threads.emplace_back(&MultiProcessorScheduler::cpuScheduler, &scheduler, i);
-    }
-    
-    // Start load balancer
-    std::thread load_balancer_thread(&MultiProcessorScheduler::loadBalancer, &scheduler);
-    
-    // Generate tasks with different affinities
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::uniform_int_distribution<> burst_dist(50, 200);
-    std::uniform_int_distribution<> affinity_dist(0, NUM_CORES - 1);
-    
-    std::cout << "Generating tasks...\n";
-    for (int i = 1; i <= 12; i++) {
-        int burst_time = burst_dist(gen);
-        int preferred_cpu = (i % 3 == 0) ? affinity_dist(gen) : -1; // Some tasks have affinity
+    try {
+        std::cout << "=== MULTI-PROCESSOR SCHEDULING DEMO ===\n\n";
         
-        Task task(i, burst_time, preferred_cpu);
-        scheduler.addTask(task);
+        const int NUM_CORES = 4;
+        MultiProcessorScheduler scheduler(NUM_CORES);
         
-        if (preferred_cpu >= 0) {
-            std::cout << "Added Task " << i << " with CPU affinity to Core " << preferred_cpu << "\n";
-        } else {
-            std::cout << "Added Task " << i << " without CPU affinity\n";
+        // Start CPU schedulers
+        std::vector<std::thread> cpu_threads;
+        for (int i = 0; i < NUM_CORES; i++) {
+            cpu_threads.emplace_back(&MultiProcessorScheduler::cpuScheduler, &scheduler, i);
         }
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        // Start load balancer
+        std::thread load_balancer_thread(&MultiProcessorScheduler::loadBalancer, &scheduler);
+        
+        // Generate tasks with different affinities
+        std::random_device rd;
+        std::mt19937 gen(rd());
+        std::uniform_int_distribution<> burst_dist(50, 200);
+        std::uniform_int_distribution<> affinity_dist(0, NUM_CORES - 1);
+        
+        std::cout << "Generating tasks...\n";
+        for (int i = 1; i <= 12; i++) {
+            int burst_time = burst_dist(gen);
+            int preferred_cpu = (i % 3 == 0) ? affinity_dist(gen) : -1; // Some tasks have affinity
+            
+            Task task(i, burst_time, preferred_cpu);
+            scheduler.addTask(task);
+            
+            if (preferred_cpu >= 0) {
+                std::cout << "Added Task " << i << " with CPU affinity to Core " << preferred_cpu << "\n";
+            } else {
+                std::cout << "Added Task " << i << " without CPU affinity\n";
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        
+        // Wait for all tasks to complete
+        scheduler.waitForCompletion();
+        
+        scheduler.displayStats();
+        
+        // Demonstrate NUMA awareness
+        NUMAScheduler numa_scheduler;
+        numa_scheduler.displayNUMATopology();
+        
+        std::cout << "\nOptimal core for NUMA node 0: " << numa_scheduler.selectOptimalCore(0) << "\n";
+        std::cout << "Optimal core for NUMA node 1: " << numa_scheduler.selectOptimalCore(1) << "\n";
+        
+        // Stop scheduler
+        scheduler.stop();
+        
+        if (load_balancer_thread.joinable()) {
+            load_balancer_thread.join();
+        }
+        
+        for (auto& thread : cpu_threads) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+        
+        std::cout << "\nMulti-processor scheduling demo completed!\n";
+        
+    } catch (const std::exception& e) {
+        std::cerr << "Error: " << e.what() << std::endl;
+        return 1;
     }
     
-    // Let tasks execute
-    std::this_thread::sleep_for(std::chrono::seconds(3));
-    
-    scheduler.displayStats();
-    
-    // Demonstrate NUMA awareness
-    NUMAScheduler numa_scheduler;
-    numa_scheduler.displayNUMATopology();
-    
-    std::cout << "\nOptimal core for NUMA node 0: " << numa_scheduler.selectOptimalCore(0) << "\n";
-    std::cout << "Optimal core for NUMA node 1: " << numa_scheduler.selectOptimalCore(1) << "\n";
-    
-    // Stop scheduler
-    scheduler.stop();
-    load_balancer_thread.join();
-    
-    for (auto& thread : cpu_threads) {
-        thread.join();
-    }
-    
-    std::cout << "\nMulti-processor scheduling demo completed!\n";
     return 0;
 }
 ```

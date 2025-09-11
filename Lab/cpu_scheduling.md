@@ -372,6 +372,68 @@ int main() {
 #include <queue>
 #include <algorithm>
 #include <climits>
+#include <iomanip>
+
+struct Process {
+    int pid;
+    int arrival_time;
+    int burst_time;
+    int remaining_time;
+    int completion_time;
+    int turnaround_time;
+    int waiting_time;
+    int priority;
+    
+    Process(int id, int at, int bt, int pr = 0) 
+        : pid(id), arrival_time(at), burst_time(bt), 
+          remaining_time(bt), priority(pr), 
+          completion_time(0), turnaround_time(0), waiting_time(0) {}
+};
+
+// ProcessScheduler class to handle display and calculations
+class ProcessScheduler {
+public:
+    std::vector<Process> processes;
+    
+    void displayProcesses() {
+        std::cout << std::setw(5) << "PID" 
+                  << std::setw(10) << "Arrival" 
+                  << std::setw(10) << "Burst" 
+                  << std::setw(12) << "Completion" 
+                  << std::setw(12) << "Turnaround" 
+                  << std::setw(10) << "Waiting" << "\n";
+        std::cout << std::string(60, '-') << "\n";
+        
+        for (const auto& p : processes) {
+            std::cout << std::setw(5) << p.pid
+                      << std::setw(10) << p.arrival_time
+                      << std::setw(10) << p.burst_time
+                      << std::setw(12) << p.completion_time
+                      << std::setw(12) << p.turnaround_time
+                      << std::setw(10) << p.waiting_time << "\n";
+        }
+    }
+    
+    double calculateAverageWaitingTime() {
+        if (processes.empty()) return 0.0;
+        
+        double total = 0;
+        for (const auto& p : processes) {
+            total += p.waiting_time;
+        }
+        return total / processes.size();
+    }
+    
+    double calculateAverageTurnaroundTime() {
+        if (processes.empty()) return 0.0;
+        
+        double total = 0;
+        for (const auto& p : processes) {
+            total += p.turnaround_time;
+        }
+        return total / processes.size();
+    }
+};
 
 class SchedulingAlgorithms {
 public:
@@ -474,52 +536,72 @@ public:
     static void RoundRobin(std::vector<Process>& processes, int quantum) {
         std::queue<int> ready_queue;
         std::vector<int> remaining_time(processes.size());
+        std::vector<bool> in_queue(processes.size(), false);
         
         for (size_t i = 0; i < processes.size(); i++) {
             remaining_time[i] = processes[i].burst_time;
         }
         
         int current_time = 0;
+        int completed = 0;
         
-        // Add initial processes to queue
+        // Sort by arrival time for initial processing
+        std::vector<int> arrival_order(processes.size());
         for (size_t i = 0; i < processes.size(); i++) {
-            if (processes[i].arrival_time <= current_time) {
-                ready_queue.push(i);
-            }
+            arrival_order[i] = i;
+        }
+        std::sort(arrival_order.begin(), arrival_order.end(),
+                  [&processes](int a, int b) {
+                      return processes[a].arrival_time < processes[b].arrival_time;
+                  });
+        
+        // Add first process if available
+        if (!processes.empty() && processes[arrival_order[0]].arrival_time <= current_time) {
+            ready_queue.push(arrival_order[0]);
+            in_queue[arrival_order[0]] = true;
         }
         
-        while (!ready_queue.empty()) {
+        while (!ready_queue.empty() || completed < (int)processes.size()) {
+            if (ready_queue.empty()) {
+                // Find next arriving process
+                for (int idx : arrival_order) {
+                    if (remaining_time[idx] > 0 && processes[idx].arrival_time > current_time) {
+                        current_time = processes[idx].arrival_time;
+                        ready_queue.push(idx);
+                        in_queue[idx] = true;
+                        break;
+                    }
+                }
+                if (ready_queue.empty()) break; // No more processes
+            }
+            
             int current_process = ready_queue.front();
             ready_queue.pop();
+            in_queue[current_process] = false;
             
             int exec_time = std::min(quantum, remaining_time[current_process]);
             remaining_time[current_process] -= exec_time;
             current_time += exec_time;
             
             // Add newly arrived processes
-            for (size_t i = 0; i < processes.size(); i++) {
-                if (processes[i].arrival_time <= current_time && remaining_time[i] > 0) {
-                    bool already_in_queue = false;
-                    std::queue<int> temp_queue = ready_queue;
-                    while (!temp_queue.empty()) {
-                        if (temp_queue.front() == (int)i) {
-                            already_in_queue = true;
-                            break;
-                        }
-                        temp_queue.pop();
-                    }
-                    if (!already_in_queue && i != current_process) {
-                        ready_queue.push(i);
-                    }
+            for (int idx : arrival_order) {
+                if (!in_queue[idx] && remaining_time[idx] > 0 && 
+                    processes[idx].arrival_time <= current_time && idx != current_process) {
+                    ready_queue.push(idx);
+                    in_queue[idx] = true;
                 }
             }
             
             if (remaining_time[current_process] == 0) {
+                completed++;
                 processes[current_process].completion_time = current_time;
-                processes[current_process].turnaround_time = processes[current_process].completion_time - processes[current_process].arrival_time;
-                processes[current_process].waiting_time = processes[current_process].turnaround_time - processes[current_process].burst_time;
+                processes[current_process].turnaround_time = 
+                    processes[current_process].completion_time - processes[current_process].arrival_time;
+                processes[current_process].waiting_time = 
+                    processes[current_process].turnaround_time - processes[current_process].burst_time;
             } else {
                 ready_queue.push(current_process);
+                in_queue[current_process] = true;
             }
         }
     }
@@ -550,8 +632,10 @@ public:
             }
             
             processes[highest_priority_job].completion_time = current_time + processes[highest_priority_job].burst_time;
-            processes[highest_priority_job].turnaround_time = processes[highest_priority_job].completion_time - processes[highest_priority_job].arrival_time;
-            processes[highest_priority_job].waiting_time = processes[highest_priority_job].turnaround_time - processes[highest_priority_job].burst_time;
+            processes[highest_priority_job].turnaround_time = 
+                processes[highest_priority_job].completion_time - processes[highest_priority_job].arrival_time;
+            processes[highest_priority_job].waiting_time = 
+                processes[highest_priority_job].turnaround_time - processes[highest_priority_job].burst_time;
             
             current_time = processes[highest_priority_job].completion_time;
             completed[highest_priority_job] = true;
@@ -576,21 +660,40 @@ int main() {
     ProcessScheduler scheduler;
     scheduler.processes = fcfs_processes;
     scheduler.displayProcesses();
-    std::cout << "Average Waiting Time: " << scheduler.calculateAverageWaitingTime() << "\n\n";
+    std::cout << "Average Waiting Time: " << scheduler.calculateAverageWaitingTime() << "\n";
+    std::cout << "Average Turnaround Time: " << scheduler.calculateAverageTurnaroundTime() << "\n\n";
     
     std::cout << "=== SJF Scheduling ===\n";
     auto sjf_processes = processes;
     SchedulingAlgorithms::SJF(sjf_processes);
     scheduler.processes = sjf_processes;
     scheduler.displayProcesses();
-    std::cout << "Average Waiting Time: " << scheduler.calculateAverageWaitingTime() << "\n\n";
+    std::cout << "Average Waiting Time: " << scheduler.calculateAverageWaitingTime() << "\n";
+    std::cout << "Average Turnaround Time: " << scheduler.calculateAverageTurnaroundTime() << "\n\n";
+    
+    std::cout << "=== SRTF Scheduling ===\n";
+    auto srtf_processes = processes;
+    SchedulingAlgorithms::SRTF(srtf_processes);
+    scheduler.processes = srtf_processes;
+    scheduler.displayProcesses();
+    std::cout << "Average Waiting Time: " << scheduler.calculateAverageWaitingTime() << "\n";
+    std::cout << "Average Turnaround Time: " << scheduler.calculateAverageTurnaroundTime() << "\n\n";
     
     std::cout << "=== Round Robin (Quantum=2) Scheduling ===\n";
     auto rr_processes = processes;
     SchedulingAlgorithms::RoundRobin(rr_processes, 2);
     scheduler.processes = rr_processes;
     scheduler.displayProcesses();
-    std::cout << "Average Waiting Time: " << scheduler.calculateAverageWaitingTime() << "\n\n";
+    std::cout << "Average Waiting Time: " << scheduler.calculateAverageWaitingTime() << "\n";
+    std::cout << "Average Turnaround Time: " << scheduler.calculateAverageTurnaroundTime() << "\n\n";
+    
+    std::cout << "=== Priority Scheduling ===\n";
+    auto priority_processes = processes;
+    SchedulingAlgorithms::PriorityScheduling(priority_processes);
+    scheduler.processes = priority_processes;
+    scheduler.displayProcesses();
+    std::cout << "Average Waiting Time: " << scheduler.calculateAverageWaitingTime() << "\n";
+    std::cout << "Average Turnaround Time: " << scheduler.calculateAverageTurnaroundTime() << "\n\n";
     
     return 0;
 }

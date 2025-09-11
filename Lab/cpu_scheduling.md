@@ -185,6 +185,21 @@ int main() {
 #include <algorithm>
 #include <iomanip>
 
+struct Process {
+    int pid;
+    int arrival_time;
+    int burst_time;
+    int remaining_time;
+    int completion_time;
+    int turnaround_time;
+    int waiting_time;
+    int priority;
+    
+    Process(int id, int at, int bt, int pr = 0) 
+        : pid(id), arrival_time(at), burst_time(bt), 
+          remaining_time(bt), priority(pr) {}
+};
+
 class MetricsCalculator {
 private:
     std::vector<Process> processes;

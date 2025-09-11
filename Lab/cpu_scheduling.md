@@ -646,7 +646,7 @@ public:
 
 // Demo main function
 int main() {
-    // Test data
+    // Test data pid, arrival_time, burst_time, priority
     std::vector<Process> processes = {
         Process(1, 0, 7, 2),
         Process(2, 2, 4, 1),

@@ -625,7 +625,7 @@ int main() {
  * 7. Classic synchronization problems and solutions
  */
 ```
-```
+
 
 ---
 

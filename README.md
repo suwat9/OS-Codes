@@ -1,4 +1,5 @@
 # OS-Codes
+[![Suwat's GitHub stats](https://github-readme-stats.vercel.app/api?username=suwat9)](https://github.com/anuraghazra/github-readme-stats)
 OS Lab
 
 1. [Chapter 6: Synchronization Tools - Student Study Worksheet](./Lab/chapter6_worksheet.md)

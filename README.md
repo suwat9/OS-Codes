@@ -6,4 +6,5 @@
 
 1. [Chapter 6: Synchronization Tools - Student Study Worksheet](./Lab/chapter6_worksheet.md)
    * [Synchronization source code](./Lab/synchronization_tools.md)
-1. [Dinning Philosophers Problem](./C-codes/dinning-philosophers.cpp) ** Solve the starvation & deadlock problems. 
+1. [Dinning Philosophers Problem](./C-codes/dinning-philosophers.cpp) ** Solve the starvation & deadlock problems.
+1. [Deadlocks Worksheet](./Lab/Deadlock-worksheet.md)
